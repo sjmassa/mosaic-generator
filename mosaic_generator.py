@@ -12,6 +12,7 @@ from random import choice
 from multiprocessing import Pool, cpu_count
 # Adds ability to pool.map to use functions with multiple arguments
 from functools import partial
+from threading import Thread
 
 # Add in libraries
 # Python Imaging Library (PIL) image processing package for Python language.
@@ -20,10 +21,12 @@ from PIL import Image
 
 # Value to input into equations to calculate the number of tiles
 # Percentage of image width
-tile_percentage_num = .015
+tile_percentage_num = .01
+# Variable to increase size of template image by a multiple
+size_multiplier = 3
 
 
-def create_tiles(template_image, size, image_dir):
+def create_tiles(size, image_dir):
     """
     Creates RGB dictionary, saves to json, resizes and saves as tiles.
     """
@@ -42,7 +45,7 @@ def create_tiles(template_image, size, image_dir):
             im1 = im.resize(size)
             # Get image average RGB while file is open, add to dictionary
             if filename not in tile_dict:
-                tile_dict[file] = get_rgb(im1)
+                tile_dict[file] = get_color(im1)
             # Save tile to new directory
             im1.save(os.path.join(tile_dir, file), "JPEG")
 
@@ -54,60 +57,47 @@ def create_tiles(template_image, size, image_dir):
     return tile_dir, json_filename
 
 
-def get_rgb(img_object):
+def get_color(img_object):
     """
     Generates 3 numerical values (red, green, blue)
     for each pixel in an image and returns the average value.
     """
 
-    rgb_list = list(img_object.getdata())
-    pixels = len(rgb_list)
-    r, g, b = 0, 0, 0
-    for pixel in rgb_list:
-        r += pixel[0]
-        g += pixel[1]
-        b += pixel[2]
-    average_rgb = [int(r/pixels), int(g/pixels), int(b/pixels)]
+    pixel_list = list(img_object.getdata())
+    x = 100
+    total = 0
+    for pixel in pixel_list[::x]:
+        total += sum(pixel)
+    average = total/(len(pixel_list)/x)
+    return int(average)
 
-    return average_rgb
 
-def crop_mosaic_get_rgb(size, column, row, image):
+def crop_mosaic(size, x, y):
     """
     Crops a tile out of the mosaic and extracts the RGB value.
     """
 
     # Crop coordinatees
-    top = int(size * column)# x
-    left = int(size * row) # y
-    bottom = int(size * (column + 1)) # x
-    right = int(size * (row + 1)) # y
+    top = int(size * y)# x
+    left = int(size * x) # y
+    bottom = int(size * (y + 1)) # x
+    right = int(size * (x + 1)) # y
     coordinates = (left, top, right, bottom)
 
-    # Getting RGB from cropped image tile
-    im1 = image.crop(coordinates)
-    portrait_rgb = get_rgb(im1)
-    portrait_rgb = portrait_rgb[0]+portrait_rgb[1]+portrait_rgb[2]
+    return coordinates
 
-    return portrait_rgb, coordinates
 
-def find_best_match(tile_data, portrait_rgb):
+def get_tile(tile_data, image_color):
     """
     Searches tile json data for closes rgb match to mosaic tile.
     """
 
-    best_match = ""
-    best_match_diff = 10000 # Arbitrary #, will be replaced with first iteration
-
-    for tile in tile_data:
-        tile_rgb = tile_data[tile][0]+tile_data[tile][1]+tile_data[tile][2]
-        if tile_rgb > portrait_rgb:
-            diff = tile_rgb - portrait_rgb
-        else:
-            diff = portrait_rgb - tile_rgb
-
-        if diff < best_match_diff:
-            best_match_diff = diff
-            best_match = tile
+    smallest_remainder = 257 # Will be replaced with first iteration
+    for color in tile_data:
+        remainder = abs(tile_data[color] - image_color)
+        if remainder < smallest_remainder:
+            smallest_remainder = remainder
+            best_match = color
 
     return best_match
 
@@ -140,7 +130,7 @@ def recursive_save(file, image, pathname="", x=1):
         basename = file.split("(")[0]
         file = f"{basename}({x}).{ext}"
         x += 1
-        recursive_save(file, image, x=x)
+        file = recursive_save(file, image, x=x)
     else:
         image.save(file, "JPEG")
 
@@ -164,6 +154,7 @@ def compose_mosaic(tile_dir, json_filename, template_file, mosaic_name, mosaic_d
 
     # Calculates how many rows and columns are needed
     with Image.open(template_file).convert("RGB") as im:
+        im = im.resize((im.width*size_multiplier, im.height*size_multiplier))
         size = round(im.width*tile_percentage_num)
         rows = round(im.width/size)
         columns = round(im.height/size)
@@ -174,13 +165,13 @@ def compose_mosaic(tile_dir, json_filename, template_file, mosaic_name, mosaic_d
             print("Composing mosaic...")
             for a in range(columns):
                 for b in range(rows):
-                    # Obtain cropped image tile RGB
-                    portrait_rgb, coordinates = crop_mosaic_get_rgb(size, a, b, im)
+                    # Get coordinates, crop image, get color
+                    coordinates = crop_mosaic(size, b, a)
+                    im1 = im.crop(coordinates)
+                    image_color = get_color(im1)
 
                     # Find the best tile match and paste to mosaic
-                    best_match = find_best_match(tile_data, portrait_rgb)
-
-                    # Paste best match tile onto mosaic
+                    best_match = get_tile(tile_data, image_color)
                     paste_path = os.path.join(tile_dir, best_match)
                     with Image.open(paste_path).convert("RGB") as paste_tile:
                         im.paste(paste_tile, coordinates)
@@ -216,22 +207,37 @@ def verify_args():
     try:
         # Verifies image and image_dir exist
         if not os.path.exists(arguments[0]):
-            sys.exit(f"Could not find {arguments[0]}.")
+            sys.exit(f"Could not find '{arguments[0]}'.")
         if not os.path.exists(arguments[1]):
-            sys.exit(f"Could not find {arguments[1]}.")
+            sys.exit(f"Could not find '{arguments[1]}'.")
 
         # Verify image file has a size and image dir has files
         if os.path.getsize(arguments[0]) == 0:
-            sys.exit(f"{arguments[0]} is an invalid file.")
+            sys.exit(f"'{arguments[0]}' is an invalid file.")
         if len(os.listdir(arguments[1])) == 0:
-            sys.exit(f"There are no files in {arguments[1]}.")
+            sys.exit(f"There are no files in '{arguments[1]}'.")
 
         # Verify image is an image file
         if not arguments[0].lower().endswith(('.png', '.jpg', '.jpeg')):
-            sys.exit(f"{arguments[0]} is an invalid file type.")
+            sys.exit(f"'{arguments[0]}' is an invalid file type.")
 
     except IndexError as e:
+        log(e, exit=True)
         sys.exit(e)
+
+
+def log(data, exit=False):
+    """
+    Logs the data parameter to 'log.txt'
+    """
+
+    if exit == True:
+        error = "EXIT_ERROR: "+data
+    else:
+        error = "ERROR: "+data
+    subprocess.run(f"echo {error} >> log.txt", shell=True)
+
+    return data
 
 
 def logging(data=""):
@@ -239,19 +245,24 @@ def logging(data=""):
     Creates log.txt if none exists.
     Logs data/time, command line args, and any user input.
     """
+    if not data:
+        subprocess.run("echo ------------------------------------ >> log.txt", shell=True)
 
-    subprocess.run("echo ------------------------------------ >> log.txt", shell=True)
+        if not os.path.exists("log.txt"):
+            subprocess.run(["touch", "log.txt"])
 
-    if not os.path.exists("log.txt"):
-        subprocess.run(["touch", "log.txt"])
+        date_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-    date_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        subprocess.run(f"echo {date_time} >> log.txt", shell=True)
 
-    subprocess.run(f"echo {date_time} >> log.txt", shell=True)
-
-    if len(sys.argv) > 1:
-        string = f"Command line arguments: '{sys.argv[1:][0]}'"
-        subprocess.run(f"echo {string} >> log.txt", shell=True)
+        try:
+            string = f"arg_1: {sys.argv[1]}, size: {os.path.getsize(sys.argv[1])}"
+            subprocess.run(f"echo {string} >> log.txt", shell=True)
+            string = f"arg_2: {sys.argv[2]}, files: {len(os.listdir(sys.argv[2]))}"
+            subprocess.run(f"echo {string} >> log.txt", shell=True)
+        except FileNotFoundError as e:
+            string = f"ERROR: {e}"
+            subprocess.run(f"echo {string} >> log.txt", shell=True)
 
     if data:
         string = f"User input: '{data}'"
@@ -274,11 +285,11 @@ def main():
 
     # Derive dimensions from portrait
     with Image.open(template_image).convert("RGB") as im:
-        size = round(im.width*tile_percentage_num)
+        size = round(im.width*size_multiplier*tile_percentage_num)
         size = (size, size)
 
     # Create the tiles
-    tile_dir, json_filename = create_tiles(template_image, size, image_dir)
+    tile_dir, json_filename = create_tiles(size, image_dir)
 
     # Creates 'mosaics' dir if one does not exist
     mosaic_dir = os.path.join(os.getcwd(), "mosaics")
