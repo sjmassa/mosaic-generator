@@ -15,9 +15,9 @@ Arg 2 is the directory of images that will comprise the mosaic.
 - **\*done\*** Rework program to run independently.
 - **\*done\*** Add recursive save.
 - **\*done\*** Logging: Add file/directory sizes, log errors/sys.exit()
-- Rework how colors of tiles and mosaics are compared.
+- **\*done\*** Rework how colors of tiles and mosaics are compared.
 - **\*done\*** Reduce pixel iterations when average RGB is calculated.
 - Add disk/cpu/memory usage statistic/logging.
 - **\*done\***Add ability to increase/decrease mosaic image size.
-- Reduce RGB value from 256 possible to 10 in order to simplify color comarison.
+- **\*Abandoned/Unnecessary\*** Reduce RGB value from 256 possible to 10 in order to simplify color comarison.
 - Subdivide tiles into smaller squares in order to refine color comparison.
