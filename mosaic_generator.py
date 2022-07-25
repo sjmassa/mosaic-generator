@@ -5,6 +5,7 @@ import os
 import subprocess
 import requests
 import shutil
+import psutil
 import json
 import sys
 from datetime import datetime
@@ -13,6 +14,7 @@ from multiprocessing import Pool, cpu_count
 # Adds ability to pool.map to use functions with multiple arguments
 from functools import partial
 from threading import Thread
+from time import sleep
 
 # Add in libraries
 # Python Imaging Library (PIL) image processing package for Python language.
@@ -21,7 +23,7 @@ from PIL import Image
 
 # Value to input into equations to calculate the number of tiles
 # Percentage of image width
-tile_percentage_num = .01
+tile_percentage_num = .02
 # Variable to increase size of template image by a multiple
 size_multiplier = 3
 
@@ -59,17 +61,22 @@ def create_tiles(size, image_dir):
 
 def get_color(img_object):
     """
-    Generates 3 numerical values (red, green, blue)
-    for each pixel in an image and returns the average value.
+    Generates 3 numerical values [red, green, blue]
+    for each pixel in an image and returns the average values.
     """
 
     pixel_list = list(img_object.getdata())
-    x = 100
+    list_skip = 100
     total = 0
-    for pixel in pixel_list[::x]:
-        total += sum(pixel)
-    average = total/(len(pixel_list)/x)
-    return int(average)
+    average = [0, 0, 0]
+    for pixel in pixel_list[::list_skip]:
+        average[0] += pixel[0]
+        average[1] += pixel[1]
+        average[2] += pixel[2]
+    list_len = len(pixel_list)/100
+    average = [int(average[0]/list_len), int(average[1]/list_len), int(average[2]/list_len)]
+
+    return average
 
 
 def crop_mosaic(size, x, y):
@@ -89,14 +96,14 @@ def crop_mosaic(size, x, y):
 
 def get_tile(tile_data, image_color):
     """
-    Searches tile json data for closes rgb match to mosaic tile.
+    Pulls out each tile data from a dictionary.
     """
 
-    smallest_remainder = 257 # Will be replaced with first iteration
+    best_match_num = 257 # Will be replaced with first iteration
     for color in tile_data:
-        remainder = abs(tile_data[color] - image_color)
-        if remainder < smallest_remainder:
-            smallest_remainder = remainder
+        remainder = sum(abs(a - b) for a, b in zip(tile_data[color], image_color))
+        if remainder < best_match_num:
+            best_match_num = remainder
             best_match = color
 
     return best_match
@@ -180,6 +187,7 @@ def compose_mosaic(tile_dir, json_filename, template_file, mosaic_name, mosaic_d
         mosaic_file = recursive_save(mosaic_file, im)
         basename = mosaic_file.rsplit("/", 1)[1]
         print(f"Saved {basename}.")
+        log(f"Saved output: '{basename}', size: {os.path.getsize(mosaic_file)}")
 
     # Shows both the orginal and mosaic images
     open_file(template_file)
@@ -203,80 +211,50 @@ def verify_args():
     Verifies the command line arguments given by user.
     """
 
-    arguments = sys.argv[1:]
-    try:
-        # Verifies image and image_dir exist
-        if not os.path.exists(arguments[0]):
-            sys.exit(f"Could not find '{arguments[0]}'.")
-        if not os.path.exists(arguments[1]):
-            sys.exit(f"Could not find '{arguments[1]}'.")
+    if len(sys.argv) != 3:
+        output = "Must have 2 command line arguments <program> <image_name> <image_directory>."
+        log(err="USER ERROR", d="Invalid number of args.", p=output, ex=True)
 
-        # Verify image file has a size and image dir has files
-        if os.path.getsize(arguments[0]) == 0:
-            sys.exit(f"'{arguments[0]}' is an invalid file.")
-        if len(os.listdir(arguments[1])) == 0:
-            sys.exit(f"There are no files in '{arguments[1]}'.")
-
-        # Verify image is an image file
-        if not arguments[0].lower().endswith(('.png', '.jpg', '.jpeg')):
-            sys.exit(f"'{arguments[0]}' is an invalid file type.")
-
-    except IndexError as e:
-        log(e, exit=True)
-        sys.exit(e)
+    arg_1 = sys.argv[1]
+    arg_2 = sys.argv[2]
+    if not arg_1.lower().endswith(('.png', '.jpg', '.jpeg')):
+        log(d=f"'{arg_1}' is invalid.", err="USER ERROR", ex=True)
+    if not os.path.exists(arg_1) or os.path.getsize(arg_1) == 0:
+        log(d=f"'{arg_1}' is invalid.", err="USER ERROR", ex=True)
+    if not os.path.exists(arg_2) or len(os.listdir(arg_2)) == 0:
+        log(d=f"'{arg_2}' is invalid.", err="USER ERROR", ex=True)
 
 
-def log(data, exit=False):
+def log(d="", err="", p="", ex=False):
     """
-    Logs the data parameter to 'log.txt'
+    Logs the data to 'log.txt'
+    p (print) prints output.
+    err (error) adds error text to log.
+    If ex=True, will exit the program.
     """
 
-    if exit == True:
-        error = "EXIT_ERROR: "+data
+    if err:
+        log_data = err+": "+d
     else:
-        error = "ERROR: "+data
-    subprocess.run(f"echo {error} >> log.txt", shell=True)
+        log_data = d
+    if not p:
+        p = d
+    if ex == True:
+        subprocess.run(f"echo {log_data} >> log.txt", shell=True)
+        sys.exit(p)
 
-    return data
-
-
-def logging(data=""):
-    """
-    Creates log.txt if none exists.
-    Logs data/time, command line args, and any user input.
-    """
-    if not data:
-        subprocess.run("echo ------------------------------------ >> log.txt", shell=True)
-
-        if not os.path.exists("log.txt"):
-            subprocess.run(["touch", "log.txt"])
-
-        date_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-
-        subprocess.run(f"echo {date_time} >> log.txt", shell=True)
-
-        try:
-            string = f"arg_1: {sys.argv[1]}, size: {os.path.getsize(sys.argv[1])}"
-            subprocess.run(f"echo {string} >> log.txt", shell=True)
-            string = f"arg_2: {sys.argv[2]}, files: {len(os.listdir(sys.argv[2]))}"
-            subprocess.run(f"echo {string} >> log.txt", shell=True)
-        except FileNotFoundError as e:
-            string = f"ERROR: {e}"
-            subprocess.run(f"echo {string} >> log.txt", shell=True)
-
-    if data:
-        string = f"User input: '{data}'"
-        subprocess.run(f"echo {string} >> log.txt", shell=True)
+    subprocess.run(f"echo {log_data} >> log.txt", shell=True)
 
 
 def main():
-    # Logging
-    logging()
-
-    # Verify command line args
-    if len(sys.argv) != 3:
-        sys.exit("Must have 2 command line arguments <program> <image_name> <image_directory>.")
+    # Create log.txt if none exists, verify args and run initial log
+    if not os.path.exists("log.txt"):
+        subprocess.run(["touch", "log.txt"])
+    date_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    log(date_time)
     verify_args()
+    log(f"Arg_1: {sys.argv[1]}, size: {os.path.getsize(sys.argv[1])}")
+    log(f"Arg_2: {sys.argv[2]}, files: {len(os.listdir(sys.argv[2]))}")
 
     # Create variables from args
     template_image = sys.argv[1]
@@ -304,7 +282,6 @@ def main():
 
     # Exit program
     sys.exit()
-
 
 if __name__ == "__main__":
     main()
